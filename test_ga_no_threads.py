@@ -1,153 +1,64 @@
-import argparse
-import csv
-import random
-import shutil
-from pathlib import Path
+# If you on a Windows machine with any Python version 
+# or an M1 mac with any Python version
+# or an Intel Mac with Python > 3.7
+# the multi-threaded version does not work
+# so instead, you can use this version. 
 
+import unittest
+import population
+import simulation 
+import genome 
+import creature 
 import numpy as np
 
-import creature
-import genome
-import population
-import simulation
+class TestGA(unittest.TestCase):
+    def testBasicGA(self):
+        pop = population.Population(pop_size=10, 
+                                    gene_count=3)
+        #sim = simulation.ThreadedSim(pool_size=1)
+        sim = simulation.Simulation()
 
-
-def run_ga(
-    run_name: str,
-    pop_size: int,
-    init_gene_count: int,
-    generations: int,
-    iterations_per_creature: int,
-    point_mutate_rate: float,
-    point_mutate_amount: float,
-    shrink_rate: float,
-    grow_rate: float,
-    seed: int,
-    clean: bool,
-):
-    # Reproducibility (as much as possible)
-    np.random.seed(seed)
-    random.seed(seed)
-
-    run_dir = Path("runs") / run_name
-    elites_dir = run_dir / "elites"
-    metrics_path = run_dir / "metrics.csv"
-
-    if clean and run_dir.exists():
-        shutil.rmtree(run_dir)
-
-    elites_dir.mkdir(parents=True, exist_ok=True)
-
-    pop = population.Population(pop_size=pop_size, gene_count=init_gene_count)
-    sim = simulation.Simulation()
-
-    best_so_far = -1e9
-    best_gen = -1
-
-    with open(metrics_path, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["gen", "best_fitness", "mean_fitness", "std_fitness", "mean_links", "max_links"])
-
-        for gen in range(generations):
-            # Evaluate
+        for iteration in range(1000):
+            # this is a non-threaded version 
+            # where we just call run_creature instead
+            # of eval_population
             for cr in pop.creatures:
-                sim.run_creature(cr, iterations_per_creature)
-
-            fits = [cr.get_fitness() for cr in pop.creatures]
-            links = [len(cr.get_expanded_links()) for cr in pop.creatures]
-
-            best_fit = float(np.max(fits))
-            mean_fit = float(np.mean(fits))
-            std_fit = float(np.std(fits))
-            mean_links = float(np.mean(links))
-            max_links = int(np.max(links))
-
-            writer.writerow([gen, best_fit, mean_fit, std_fit, mean_links, max_links])
-            f.flush()
-
-            print(
-                gen,
-                "best:", np.round(best_fit, 4),
-                "mean:", np.round(mean_fit, 4),
-                "std:", np.round(std_fit, 4),
-                "mean_links:", int(np.round(mean_links)),
-                "max_links:", max_links,
-            )
-
-            # Save elite ONLY when we improved (so you don't get 300 files every run)
-            if best_fit > best_so_far + 1e-9:
-                best_so_far = best_fit
-                best_gen = gen
-                elite_src = pop.creatures[int(np.argmax(fits))]
-
-                # overwrite “best so far”
-                genome.Genome.to_csv(elite_src.dna, str(run_dir / "best_elite.csv"))
-
-                # also keep a checkpoint of “new best moments”
-                genome.Genome.to_csv(elite_src.dna, str(elites_dir / f"elite_gen_{gen:04d}.csv"))
-
-            # Selection -> Next generation
+                sim.run_creature(cr, 2400)            
+            #sim.eval_population(pop, 2400)
+            fits = [cr.get_distance_travelled() 
+                    for cr in pop.creatures]
+            links = [len(cr.get_expanded_links()) 
+                    for cr in pop.creatures]
+            print(iteration, "fittest:", np.round(np.max(fits), 3), 
+                  "mean:", np.round(np.mean(fits), 3), "mean links", np.round(np.mean(links)), "max links", np.round(np.max(links)))       
             fit_map = population.Population.get_fitness_map(fits)
             new_creatures = []
-
-            for _ in range(pop_size):
-                p1 = pop.creatures[population.Population.select_parent(fit_map)]
-                p2 = pop.creatures[population.Population.select_parent(fit_map)]
-
+            for i in range(len(pop.creatures)):
+                p1_ind = population.Population.select_parent(fit_map)
+                p2_ind = population.Population.select_parent(fit_map)
+                p1 = pop.creatures[p1_ind]
+                p2 = pop.creatures[p2_ind]
+                # now we have the parents!
                 dna = genome.Genome.crossover(p1.dna, p2.dna)
-                dna = genome.Genome.point_mutate(dna, rate=point_mutate_rate, amount=point_mutate_amount)
-                dna = genome.Genome.shrink_mutate(dna, rate=shrink_rate)
-                dna = genome.Genome.grow_mutate(dna, rate=grow_rate)
-
-                child = creature.Creature(1)
-                child.update_dna(dna)
-                new_creatures.append(child)
-
-            # Elitism: copy the best from this generation to slot 0
-            elite_src = pop.creatures[int(np.argmax(fits))]
-            elite = creature.Creature(1)
-            elite.update_dna(elite_src.dna)
-            new_creatures[0] = elite
-
+                dna = genome.Genome.point_mutate(dna, rate=0.1, amount=0.25)
+                dna = genome.Genome.shrink_mutate(dna, rate=0.25)
+                dna = genome.Genome.grow_mutate(dna, rate=0.1)
+                cr = creature.Creature(1)
+                cr.update_dna(dna)
+                new_creatures.append(cr)
+            # elitism
+            max_fit = np.max(fits)
+            for cr in pop.creatures:
+                if cr.get_distance_travelled() == max_fit:
+                    new_cr = creature.Creature(1)
+                    new_cr.update_dna(cr.dna)
+                    new_creatures[0] = new_cr
+                    filename = "elite_"+str(iteration)+".csv"
+                    genome.Genome.to_csv(cr.dna, filename)
+                    break
+            
             pop.creatures = new_creatures
+                            
+        self.assertNotEqual(fits[0], 0)
 
-    print("\n=== RUN COMPLETE ===")
-    print("Run:", run_name)
-    print("Best fitness:", best_so_far)
-    print("Best generation:", best_gen)
-    print("Saved:", metrics_path)
-    print("Saved:", run_dir / "best_elite.csv")
-    print("Elite checkpoints in:", elites_dir)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--run", default="run_01")
-    parser.add_argument("--pop", type=int, default=10)
-    parser.add_argument("--genes", type=int, default=3)
-    parser.add_argument("--gens", type=int, default=300)
-    parser.add_argument("--iters", type=int, default=2400)
-
-    parser.add_argument("--mut-rate", type=float, default=0.10)
-    parser.add_argument("--mut-amt", type=float, default=0.25)
-    parser.add_argument("--shrink", type=float, default=0.25)
-    parser.add_argument("--grow", type=float, default=0.10)
-
-    parser.add_argument("--seed", type=int, default=123)
-    parser.add_argument("--clean", action="store_true")
-
-    args = parser.parse_args()
-
-    run_ga(
-        run_name=args.run,
-        pop_size=args.pop,
-        init_gene_count=args.genes,
-        generations=args.gens,
-        iterations_per_creature=args.iters,
-        point_mutate_rate=args.mut_rate,
-        point_mutate_amount=args.mut_amt,
-        shrink_rate=args.shrink,
-        grow_rate=args.grow,
-        seed=args.seed,
-        clean=args.clean,
-    )
+unittest.main()
